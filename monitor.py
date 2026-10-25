@@ -139,8 +139,8 @@ def send_message(token, chat_id, message):
     )
     if not resp.ok:
         # Do not print token-bearing HTTP URLs or raw responses in public CI logs.
-        if resp.status_code == 401:
-            reason = "Telegram token is invalid or has been revoked"
+        if resp.status_code in (401, 404):
+            reason = "Telegram bot token is invalid, revoked or incorrectly copied"
         elif resp.status_code == 400:
             reason = "Telegram chat ID may be invalid; ensure you started the bot"
         elif resp.status_code == 403:
