@@ -137,7 +137,17 @@ def send_message(token, chat_id, message):
               "disable_web_page_preview": True},
         timeout=TIMEOUT,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        # Do not print token-bearing HTTP URLs or raw responses in public CI logs.
+        if resp.status_code == 401:
+            reason = "Telegram token is invalid or has been revoked"
+        elif resp.status_code == 400:
+            reason = "Telegram chat ID may be invalid; ensure you started the bot"
+        elif resp.status_code == 403:
+            reason = "Telegram bot is blocked or cannot message this chat"
+        else:
+            reason = "Telegram server returned an error"
+        raise RuntimeError(f"{reason} (HTTP {resp.status_code})")
     data = resp.json()
     if not data.get("ok"):
         raise RuntimeError("Telegram returned non-ok response")
@@ -158,10 +168,21 @@ def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
-        print("SETUP NEEDED: GitHub Actions secrets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required.")
-        return 0
+        missing = ", ".join(key for key, value in (
+            ("TELEGRAM_BOT_TOKEN", token),
+            ("TELEGRAM_CHAT_ID", chat_id),
+        ) if not value)
+        print(f"SETUP NEEDED: missing repository Actions secret(s): {missing}")
+        return 1
     if os.getenv("SEND_TEST", "false").lower() == "true":
-        send_message(token, chat_id, "특가 감시봇 테스트 성공! GitHub Actions 연결이 정상입니다.")
+        try:
+            send_message(token, chat_id, "특가 감시봇 테스트 성공! GitHub Actions 연결이 정상입니다.")
+        except requests.RequestException:
+            print("ERROR: Telegram API network request failed.")
+            return 1
+        except (RuntimeError, ValueError) as exc:
+            print(f"ERROR: {exc}")
+            return 1
         print("Test notification sent.")
         return 0
 
