@@ -34,6 +34,11 @@ DEAL_TERMS = [
     "득템", "가격파괴", "가격 미쳤", "가격미쳤", "80% 할인", "90% 할인",
     "80%할인", "90%할인", "초저가", "핫딜", "파격가",
 ]
+APPLE_KEYWORDS = json.loads(
+    Path(__file__).with_name("apple_keywords.json").read_text(encoding="utf-8")
+)
+APPLE_RULE_VERSION = APPLE_KEYWORDS["rule_version"]
+
 EXCLUDE_TERMS = ["[종료]", "(종료)", "[품절]", "(품절)", "[마감]", "(마감)"]
 RECENT_MINUTES = int(os.getenv("RECENT_MINUTES", "45"))
 TIMEOUT = 13
@@ -55,12 +60,29 @@ def good_link(url):
         return False
 
 
+def apple_product_type(title):
+    """Match a configurable Apple device family, excluding accessory-only posts."""
+    normalized = re.sub(r"\s+", " ", title).strip().lower()
+    matched_product = next((
+        name for name, aliases in APPLE_KEYWORDS["products"].items()
+        if any(alias.lower() in normalized for alias in aliases)
+    ), None)
+    if matched_product is None:
+        return None
+    if any(term.lower() in normalized for term in APPLE_KEYWORDS["accessory_exclusions"]):
+        return None
+    return matched_product
+
+
 def classify(title):
     compact = re.sub(r"\s+", " ", title).strip().lower()
-    if any(t in compact for t in ERROR_TERMS):
-        return "가격 오류 의심"
     if any(t in compact for t in EXCLUDE_TERMS):
         return None
+    apple_product = apple_product_type(compact)
+    if any(t in compact for t in ERROR_TERMS):
+        return f"애플 {apple_product} 가격 오류 의심" if apple_product else "가격 오류 의심"
+    if apple_product:
+        return f"애플 {apple_product} 특가 제보"
     if any(t in compact for t in DEAL_TERMS):
         return "초특가 제보"
     return None
@@ -205,9 +227,21 @@ def main():
         print("ERROR: no sources returned usable posts. Check site blocking or parser.")
         return 1
 
+    # First Apple-keyword-enabled run: silently mark existing Apple posts as read.
+    # Otherwise adding broad product keywords would alert old HTML board posts.
+    apple_version_changed = state.get("apple_rule_version", 0) != APPLE_RULE_VERSION
+    if apple_version_changed:
+        for item in found:
+            normalized = item["title"].lower()
+            if (apple_product_type(normalized)
+                    and not any(t in normalized for t in ERROR_TERMS)):
+                state["seen"].setdefault(item_id(item), now.isoformat())
+        state["apple_rule_version"] = APPLE_RULE_VERSION
+        print("Apple device keywords activated; already listed posts baselined.")
+
     # Prune at least once a day so the public-repo scheduled workflow stays active.
     today = now.strftime("%Y-%m-%d")
-    dirty = state.get("heartbeat_day") != today
+    dirty = state.get("heartbeat_day") != today or apple_version_changed
     if dirty:
         oldest = now - timedelta(days=30)
         state["seen"] = {
