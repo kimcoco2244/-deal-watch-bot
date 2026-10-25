@@ -1,0 +1,49 @@
+name: Deal Watch Telegram
+on:
+  schedule:
+    - cron: "2/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      send_test:
+        description: "Send a Telegram test message only"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deal-watch
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Watch deals
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TEST: ${{ inputs.send_test || 'false' }}
+        run: python monitor.py
+      - name: Commit state changes
+        if: success() && github.event_name != 'workflow_dispatch' || (success() && inputs.send_test != true)
+        run: |
+          if [ -n "$(git status --porcelain -- .state/seen.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .state/seen.json
+            git commit -m "chore: update alert state [skip ci]"
+            git push
+          fi
